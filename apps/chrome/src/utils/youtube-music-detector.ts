@@ -245,13 +245,19 @@ export class YouTubeMusicDetector {
 
   static isPlaying(): boolean {
     try {
+      // Cara paling reliable: cek dari video element langsung
+      const video = document.querySelector('video');
+      if (video) {
+        return !video.paused && !video.ended && video.currentTime > 0;
+      }
+
+      // Fallback: cek dari play button
       const playButton = document.querySelector(this.SELECTORS.playButton);
       if (playButton) {
         const button = playButton.querySelector('button');
         if (button) {
           const ariaLabel = button.getAttribute('aria-label');
           const title = playButton.getAttribute('title');
-          // Check if it says "Pause" (playing) or "Play" (paused)
           return (
             ariaLabel?.toLowerCase().includes('pause') ||
             title?.toLowerCase().includes('pause') ||

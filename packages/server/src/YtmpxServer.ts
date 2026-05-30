@@ -25,6 +25,9 @@ export class YtmpxServer {
   private currentTrack: TrackMetadata | null = null;
   private isPlaying = false;
   private isDiscordRpcEnabled = true;
+  private trackStartedAt: number | null = null;
+  // private lastTrackTitle: string | null = null;
+  private sessionStartedAt: number | null = null;
 
   public constructor() {
     this.discordClient = new Client({
@@ -95,24 +98,40 @@ export class YtmpxServer {
 
     switch (eventType) {
       case 'track':
-        if (this.isValidMetadata(metadata)) {
+        if (this.isValidMetadata(metadata) && metadata.currentDuration > 0) {
           this.currentTrack = metadata;
+          this.trackStartedAt = Date.now() - metadata.currentDuration;
+          // this.lastTrackTitle = metadata.title;
+          // Set session start pertama kali aja
+          if (!this.sessionStartedAt) {
+            this.sessionStartedAt = Date.now();
+          }
         }
         updateDiscordActivity();
         break;
 
       case 'pause':
-        this.isPlaying = false;
-        if (this.isValidMetadata(metadata)) {
+        if (this.isValidMetadata(metadata) && metadata.currentDuration > 0) {
+          const prevDuration = this.currentTrack?.currentDuration ?? 0;
+          // Kalau duration naik = lagu jalan, bukan beneran pause
+          this.isPlaying = metadata.currentDuration > prevDuration;
           this.currentTrack = metadata;
+          this.trackStartedAt = Date.now() - metadata.currentDuration;
+          if (!this.sessionStartedAt) {
+            this.sessionStartedAt = Date.now();
+          }
         }
         updateDiscordActivity();
         break;
 
       case 'resume':
         this.isPlaying = true;
-        if (this.isValidMetadata(metadata)) {
+        if (this.isValidMetadata(metadata) && metadata.currentDuration > 0) {
           this.currentTrack = metadata;
+          this.trackStartedAt = Date.now() - metadata.currentDuration;
+          if (!this.sessionStartedAt) {
+            this.sessionStartedAt = Date.now();
+          }
         }
         updateDiscordActivity();
         break;
@@ -143,16 +162,23 @@ export class YtmpxServer {
       await this.discordClient.login();
     }
 
-    const { title, author, image, currentDuration, totalDuration, artistUrl } =
+    const { title, author, image, totalDuration, artistUrl } =
       this.currentTrack;
 
-    const startTime = this.isPlaying ? Date.now() - currentDuration : undefined;
-    const endTime =
-      this.isPlaying && totalDuration > 0
-        ? Date.now() + (totalDuration - currentDuration)
-        : undefined;
     const currentTrackUrl =
       this.currentTrack.url || 'https://music.youtube.com';
+
+    // Karena extension selalu kirim 'pause', deteksi playing dari isPlaying override di handler
+    // Playing: endTimestamp = sisa waktu lagu
+    // Pause: startTimestamp = elapsed sesi
+    const startTime = this.isPlaying
+      ? (this.trackStartedAt ?? undefined)
+      : (this.sessionStartedAt ?? undefined);
+
+    const endTime =
+      this.isPlaying && totalDuration > 0 && this.trackStartedAt
+        ? this.trackStartedAt + totalDuration
+        : undefined;
 
     const activity: SetActivity = {
       details: title || 'Unknown Title',
