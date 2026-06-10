@@ -2,6 +2,8 @@ import type { Metadata } from '../types/metadata';
 
 export class YouTubeMusicDetector {
   public static DEBUG_MODE = false;
+  private static lastValidPlaylist: string | null = null;
+  private static lastValidListId: string | null = null;
 
   private static readonly SELECTORS = {
     title: 'ytmusic-player-bar yt-formatted-string.title',
@@ -165,6 +167,15 @@ export class YouTubeMusicDetector {
             playlist = possibleAlbum;
           }
         }
+      }
+
+      // Cache / Restore playlist name untuk mengatasi masalah saat user pindah ke tab Lirik/Terkait (dimana panel antrean disembunyikan)
+      if (playlist && playingListId && !IGNORE_PLAYLIST_REGEX.test(playlist)) {
+        this.lastValidPlaylist = playlist;
+        this.lastValidListId = playingListId;
+      } else if (!playlist && playingListId && playingListId === this.lastValidListId && this.lastValidPlaylist) {
+        playlist = this.lastValidPlaylist;
+        if (YouTubeMusicDetector.DEBUG_MODE) console.log('[YTMPX Cache] Restored playlist:', playlist);
       }
 
       // 6. Fallback Generic: Deteksi nama bawaan berdasar ID (Radio atau Playlist)
