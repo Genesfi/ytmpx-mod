@@ -1,7 +1,8 @@
 import { WebSocketServer } from 'ws';
 import { Client, SetActivity } from '@xhayper/discord-rpc';
-import { ActivityType } from 'discord-api-types/v10';
+// import { ActivityType } from 'discord-api-types/v10';
 import { DISCORD_CLIENT_ID, WEBSOCKET_PORT } from './constants.js';
+import { readFileSync } from 'fs';
 import { debounce } from './utils.js';
 
 interface TrackMetadata {
@@ -12,6 +13,7 @@ interface TrackMetadata {
   currentDuration: number;
   image: string | null;
   artistUrl: string | null;
+  playlist?: string | null;
 }
 
 interface WebSocketEvent {
@@ -79,7 +81,18 @@ export class YtmpxServer {
 
     console.log('Waiting for YTMPX extension to connect...');
   }
-
+  private getActivityType(): number {
+    try {
+      const configPath = new URL('../../../ytmpx_config.json', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1');
+      console.log('[DEBUG] config path:', configPath);
+      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+      console.log('[DEBUG] activity_type:', config.activity_type);
+      return config.activity_type === 'playing' ? 0 : 2;
+    } catch (e) {
+      console.log('[DEBUG] config error:', e);
+      return 2;
+    }
+  }
   private isValidMetadata(metadata: TrackMetadata): boolean {
     return !!(
       metadata.title &&
@@ -113,13 +126,13 @@ export class YtmpxServer {
       case 'pause':
         if (this.isValidMetadata(metadata) && metadata.currentDuration > 0) {
           const prevDuration = this.currentTrack?.currentDuration ?? 0;
-          // Kalau duration naik = lagu jalan, bukan beneran pause
           this.isPlaying = metadata.currentDuration > prevDuration;
           this.currentTrack = metadata;
           this.trackStartedAt = Date.now() - metadata.currentDuration;
           if (!this.sessionStartedAt) {
             this.sessionStartedAt = Date.now();
           }
+          console.log(`[DEBUG] sessionStartedAt=${this.sessionStartedAt} isPlaying=${this.isPlaying} prev=${prevDuration} curr=${metadata.currentDuration}`);
         }
         updateDiscordActivity();
         break;
@@ -162,7 +175,7 @@ export class YtmpxServer {
       await this.discordClient.login();
     }
 
-    const { title, author, image, totalDuration, artistUrl } =
+    const { title, author, image, totalDuration, artistUrl, playlist } =
       this.currentTrack;
 
     const currentTrackUrl =
@@ -171,20 +184,40 @@ export class YtmpxServer {
     // Karena extension selalu kirim 'pause', deteksi playing dari isPlaying override di handler
     // Playing: endTimestamp = sisa waktu lagu
     // Pause: startTimestamp = elapsed sesi
-    const startTime = this.isPlaying
-      ? (this.trackStartedAt ?? undefined)
-      : (this.sessionStartedAt ?? undefined);
+    const activityType = this.getActivityType();
+    const isPlayingMode = activityType === 0;
+    console.log('[DEBUG] isPlayingMode:', isPlayingMode, 'activityType:', activityType, 'smallImageKey:', isPlayingMode ? 'ytmusic_icon' : 'undefined', 'image:', image ? 'ada' : 'null');
 
-    const endTime =
-      this.isPlaying && totalDuration > 0 && this.trackStartedAt
-        ? this.trackStartedAt + totalDuration
-        : undefined;
+    const startTime = isPlayingMode
+      ? (this.sessionStartedAt ?? undefined)
+      : (!this.isPlaying ? (this.sessionStartedAt ?? undefined) : (this.trackStartedAt ?? undefined));
+
+    const endTime = !isPlayingMode && this.isPlaying && totalDuration > 0 && this.trackStartedAt
+      ? this.trackStartedAt + totalDuration
+      : undefined;
+
+    let formattedPlaylist = playlist;
+    if (formattedPlaylist && !formattedPlaylist.toLowerCase().includes('playlist') && !formattedPlaylist.toLowerCase().includes('mix') && !formattedPlaylist.toLowerCase().includes('radio')) {
+      formattedPlaylist = `${formattedPlaylist} (Playlist)`;
+    }
+
+    let detailsText = title || 'Unknown Title';
+    let stateText = author || 'Unknown Artist';
+
+    // Jika mode Playing (0), gabungkan ke 2 baris. Jika Listening (2), biarkan 3 baris natural.
+    if (isPlayingMode && formattedPlaylist) {
+      detailsText = `${title} • ${author}`;
+      stateText = formattedPlaylist;
+    }
 
     const activity: SetActivity = {
-      details: title || 'Unknown Title',
-      state: author || 'Unknown Artist',
+      details: detailsText,
+      state: stateText,
       largeImageKey: image ?? undefined,
-      type: ActivityType.Listening,
+      largeImageText: formattedPlaylist ?? undefined,
+      smallImageKey: isPlayingMode ? 'ytmusic_icon' : 'ytmusic_icon',
+      smallImageText: 'YouTube Music',
+      type: this.getActivityType(),
       startTimestamp: startTime,
       endTimestamp: endTime,
       name: 'YouTube Music',
